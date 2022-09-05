@@ -7,51 +7,62 @@ provider "alicloud" {
 }
 
 locals {
-  this_instance_id      = var.existing_instance_id != "" ? var.existing_instance_id : concat(alicloud_kvstore_instance.this.*.id, [""])[0]
-  create_more_resources = var.existing_instance_id != "" || var.create_instance ? true : false
-  create_account        = local.create_more_resources && var.create_account
-  project               = "acs_kvstore"
+  vswitch_id = var.create_vswitch? module.vpc.this_vswitch_ids[0] : var.vswitch_id
+
 }
 
-resource "alicloud_kvstore_instance" "this" {
-  count                  = var.existing_instance_id != "" ? 0 : var.create_instance ? 1 : 0
-  instance_type          = "Redis"
-  instance_class         = var.instance_class
-  instance_name          = var.instance_name
-  password               = var.password
-  kms_encrypted_password = var.kms_encrypted_password
-  kms_encryption_context = var.kms_encryption_context
+data "alicloud_zones" "default" {
+  available_resource_creation = "KVStore"
+}
+
+data "alicloud_kvstore_instance_classes" "default" {
+  engine         = "Redis"
+  engine_version = var.engine_version
+  zone_id        = data.alicloud_zones.default.zones.0.id
+}
+
+module "redis" {
+  source = "github.com/terraform-alicloud-modules/terraform-alicloud-redis"
+
+  // Instance
+  create_instance        = var.create_instance
   engine_version         = var.engine_version
-  vswitch_id             = var.vswitch_id
+  instance_name          = var.instance_name
+  instance_class         = var.instance_class != "" ? var.instance_class : data.alicloud_kvstore_instance_classes.default.instance_classes.0
+  availability_zone      = var.availability_zone
+  vswitch_id             = local.vswitch_id
   security_ips           = var.security_ips
   instance_charge_type   = var.instance_charge_type
-  availability_zone      = var.availability_zone
   period                 = var.period
   auto_renew             = var.auto_renew
   auto_renew_period      = var.auto_renew_period
   private_ip             = var.private_ip
-  backup_id              = var.instance_backup_id
-  tags                   = var.tags
+  instance_backup_id     = var.instance_backup_id
   vpc_auth_mode          = var.vpc_auth_mode
+  password               = var.password
+  kms_encrypted_password = var.kms_encrypted_password
+  kms_encryption_context = var.kms_encryption_context
   maintain_start_time    = var.maintain_start_time
   maintain_end_time      = var.maintain_end_time
+  tags                   = var.tags
+
+  // Backup Policy
+  backup_policy_backup_period = var.backup_policy_backup_period
+  backup_policy_backup_time   = var.backup_policy_backup_time
+
+  // CMS Alarm
+  enable_alarm_rule = var.enable_alarm_rule
+
+  // Account
+  accounts = var.accounts
+
+
 }
 
-resource "alicloud_kvstore_backup_policy" "this" {
-  count         = local.create_more_resources ? 1 : 0
-  instance_id   = local.this_instance_id
-  backup_period = var.backup_policy_backup_period
-  backup_time   = var.backup_policy_backup_time
+module "vpc" {
+  source             = "alibaba/vpc/alicloud"
+  create             = true
+  vpc_cidr           = "172.16.0.0/16"
+  vswitch_cidrs      = ["172.16.0.0/21"]
+  availability_zones = [data.alicloud_zones.default.zones.0.id]
 }
-
-module "accounts" {
-  source                  = "./modules/account"
-  redis_instance_id       = local.this_instance_id
-  create_account          = local.create_account
-  profile                 = var.profile
-  shared_credentials_file = var.shared_credentials_file
-  region                  = var.region
-  skip_region_validation  = var.skip_region_validation
-  accounts                = var.accounts
-}
-
